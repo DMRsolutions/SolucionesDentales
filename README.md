@@ -144,13 +144,25 @@ información con la que se pueda hacer algo sin la contraseña.
 ### 5.2 Planes y control de funciones (para ti, como dueño del sistema)
 
 Cada doctor tiene un documento en `doctors/{uid}` con un campo `plan`:
-**Básico**, **Pro** o **Premium**. Todo doctor nuevo empieza en **Básico**.
-Las funciones nuevas están condicionadas al plan (ver `FEATURE_MIN_PLAN` en
+**Básico** o **Premium**. Todo doctor nuevo empieza en **Básico**. Las
+funciones nuevas están condicionadas al plan (ver `FEATURE_MIN_PLAN` en
 `index.html` si quieres cambiar qué función va en qué plan):
 
-- **Pro**: confirmaciones/recordatorios de cita por WhatsApp + colores de
-  proximidad en las citas.
-- **Premium**: todo lo de Pro + planes de tratamiento y presupuestos.
+- **Básico** (incluido siempre): pacientes/expedientes, citas y seguimiento,
+  pagos, reportes, subida de archivos (radiografías/fotos), y el plan de
+  tratamiento *sin* costos (solo el listado de procedimientos por paciente).
+- **Premium**: todo lo de Básico, más — odontograma, aviso/banner de citas
+  próximas al abrir el sistema, colores de proximidad en citas,
+  confirmaciones/recordatorios por WhatsApp, costos y presupuesto dentro de
+  los planes de tratamiento (con abono/liquidación en Pagos y descarga de PDF),
+  recetas, y cierre de sesión automático por inactividad (10 minutos sin
+  actividad; ver `INACTIVITY_LIMIT_MS` en `index.html` para cambiar el tiempo).
+
+**Nota sobre el plan "Pro" anterior:** si tenías doctores con ese plan
+intermedio, siguen funcionando exactamente igual que Premium (no perdieron
+ninguna función). Al entrar como administrador vas a ver un aviso arriba de
+la lista de doctores con un botón para pasarlos formalmente a Premium con un
+solo clic — no hace falta tocar nada en Firebase Console.
 
 Para poder cambiarle el plan a un doctor necesitas ser **administrador**:
 
@@ -160,7 +172,7 @@ Para poder cambiarle el plan a un doctor necesitas ser **administrador**:
    Users, columna "User UID"). No necesita campos, puede quedar vacío.
 3. Inicia sesión en la app con esa cuenta: verás un nuevo apartado
    **"Administración"** en el menú, con la lista de doctores y botones para
-   asignarles Básico / Pro / Premium. Un doctor nunca puede subirse el plan a sí
+   asignarles Básico / Premium. Un doctor nunca puede subirse el plan a sí
    mismo — solo tú, desde ahí.
 
 ### 5.3 Confirmaciones y recordatorios de cita por WhatsApp
@@ -177,9 +189,19 @@ doctor guarda su número de contacto en **Ajustes**, dentro de la app.
 En el Panel y en Citas, las citas próximas se resaltan por color: hoy (rojo),
 mañana o pasado (ámbar), en la semana (azul); esto ayuda a detectar de un vistazo
 qué citas se acercan, sin necesidad de notificaciones push (que requerirían un
-backend con Firebase Cloud Functions, no incluido aquí).
+backend con Firebase Cloud Functions, no incluido aquí). Además, en el Panel
+general aparece un aviso/banner cuando hay citas hoy o mañana, visible cada vez
+que se abre el sistema (plan Premium).
 
 ### 5.5 Planes de tratamiento y presupuestos
+
+Dentro del expediente de cada paciente, la pestaña **"Plan de tratamiento"**
+(Básico) o **"Planes/Presupuestos"** (Premium) permite armar un plan con
+procedimientos (diente, procedimiento y, en Premium, costo), calcular el total
+automáticamente, darle seguimiento (Propuesto → Aceptado → En progreso →
+Completado) y — solo en Premium — descargar un PDF de presupuesto para
+entregar al paciente. En Básico, el mismo plan se guarda sin costos: sirve
+como checklist clínico y de seguimiento, sin la parte de presupuesto.
 
 Dentro del expediente de cada paciente, la pestaña **"Planes/Presupuestos"**
 permite armar un plan con procedimientos (diente, procedimiento, costo), calcular
@@ -190,9 +212,10 @@ Completado) y descargar un PDF de presupuesto para entregar al paciente.
 poder guardar el plan (el diente es opcional, el costo se toma como 0 si se deja
 vacío) — si no, el botón "Guardar plan" muestra un aviso en lugar de no hacer nada.
 
-### 5.6 Pagos: presupuestos con abono/liquidación + pagos sueltos
+### 5.6 Pagos: presupuestos con abono/liquidación + pagos sueltos (Premium)
 
-La pestaña **"Pagos"** de cada paciente ahora tiene dos partes:
+La pestaña **"Pagos"** de cada paciente, en un doctor **Premium**, tiene dos
+partes (en **Básico** solo se ve la parte 2, ya que ahí no hay costos/presupuesto):
 
 1. **Presupuestos del paciente** — lista automáticamente los presupuestos creados
    en la pestaña "Planes/Presupuestos", con su total, lo abonado hasta ahora y lo
@@ -207,7 +230,7 @@ Internamente, cada abono se guarda como un documento normal en `payments` con un
 campo nuevo `planId` que lo liga al presupuesto; los pagos sin `planId` son los
 "sueltos" de siempre.
 
-### 5.7 Recetas (recetario numerado con respaldo)
+### 5.7 Recetas (recetario numerado con respaldo, Premium)
 
 La pestaña **"Recetas"** del expediente permite generar una receta con diagnóstico
 (opcional), uno o más medicamentos con sus indicaciones/dosis y notas generales.
