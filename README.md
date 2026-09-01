@@ -186,6 +186,47 @@ permite armar un plan con procedimientos (diente, procedimiento, costo), calcula
 el total automáticamente, darle seguimiento (Propuesto → Aceptado → En progreso →
 Completado) y descargar un PDF de presupuesto para entregar al paciente.
 
+**Nota:** al menos un procedimiento necesita traer texto en "Procedimiento" para
+poder guardar el plan (el diente es opcional, el costo se toma como 0 si se deja
+vacío) — si no, el botón "Guardar plan" muestra un aviso en lugar de no hacer nada.
+
+### 5.6 Pagos: presupuestos con abono/liquidación + pagos sueltos
+
+La pestaña **"Pagos"** de cada paciente ahora tiene dos partes:
+
+1. **Presupuestos del paciente** — lista automáticamente los presupuestos creados
+   en la pestaña "Planes/Presupuestos", con su total, lo abonado hasta ahora y lo
+   que resta. Cada uno tiene un botón **"Registrar abono"** (con un atajo para
+   "Liquidar total") que va sumando pagos parciales hasta completar el total.
+2. **Pagos sin presupuesto** — la tabla y el botón **"Agregar pago"** de siempre,
+   para cobros que no vienen de un presupuesto generado (por ejemplo, una consulta
+   suelta). Ambas opciones conviven: si no hay presupuesto, se sigue pudiendo
+   registrar el pago directo.
+
+Internamente, cada abono se guarda como un documento normal en `payments` con un
+campo nuevo `planId` que lo liga al presupuesto; los pagos sin `planId` son los
+"sueltos" de siempre.
+
+### 5.7 Recetas (recetario numerado con respaldo)
+
+La pestaña **"Recetas"** del expediente permite generar una receta con diagnóstico
+(opcional), uno o más medicamentos con sus indicaciones/dosis y notas generales.
+Cada receta:
+
+- Recibe un **folio consecutivo** (`R-000001`, `R-000002`, …) que nunca se repite,
+  asignado por doctor mediante una transacción de Firestore
+  (`doctors/{uid}.recetaCounter`).
+- Queda **guardada en Firestore como respaldo permanente**: puedes volver a
+  cualquier receta anterior del paciente y reabrirla cuando quieras, aunque
+  cambies de dispositivo.
+- Se puede **ver/imprimir en PDF** desde el botón de descarga: abre una vista
+  lista para imprimir con encabezado (nombre del consultorio y tu cédula
+  profesional, configurables en **Ajustes**), folio, fecha, paciente, la tabla de
+  medicamentos y una línea para firma y sello.
+
+Para que el encabezado de tus recetas se vea completo, llena **Ajustes → Cédula
+profesional** y **Nombre del consultorio**.
+
 ## Notas importantes
 
 - **Cuentas de acceso (login):** ahora usan Firebase Authentication. El mismo correo y
