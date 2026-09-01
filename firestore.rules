@@ -1,0 +1,46 @@
+rules_version = '2';
+
+// Reglas de seguridad de Firestore para DMR Consultorio Dental.
+// Cada documento tiene un campo "ownerId" con el uid del usuario que lo
+// creó. Estas reglas obligan a que:
+//  - Solo un usuario que inició sesión pueda leer o escribir datos.
+//  - Un usuario solo pueda ver/editar/borrar SUS PROPIOS documentos
+//    (pacientes, citas y pagos), nunca los de otra cuenta.
+//  - Al crear un documento, el ownerId que se guarda sea el del usuario
+//    que hace la petición (no se puede "regalar" datos a otro uid).
+//
+// Cómo instalarlas:
+//  1. Firebase Console → tu proyecto → Firestore Database → pestaña "Rules".
+//  2. Pega todo el contenido de este archivo, reemplazando lo que haya.
+//  3. Presiona "Publish".
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    match /patients/{patientId} {
+      allow read, update, delete: if request.auth != null
+        && resource.data.ownerId == request.auth.uid;
+      allow create: if request.auth != null
+        && request.resource.data.ownerId == request.auth.uid;
+    }
+
+    match /appointments/{appointmentId} {
+      allow read, update, delete: if request.auth != null
+        && resource.data.ownerId == request.auth.uid;
+      allow create: if request.auth != null
+        && request.resource.data.ownerId == request.auth.uid;
+    }
+
+    match /payments/{paymentId} {
+      allow read, update, delete: if request.auth != null
+        && resource.data.ownerId == request.auth.uid;
+      allow create: if request.auth != null
+        && request.resource.data.ownerId == request.auth.uid;
+    }
+
+    // Cualquier otra colección: bloqueada por defecto.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
