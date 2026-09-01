@@ -128,6 +128,64 @@ En iPhone (Safari): botón compartir → **Agregar a pantalla de inicio**.
 Una vez instalada, abre y cierra la app normal, sin la barra del navegador, con su propio
 ícono.
 
+## 5. Funciones nuevas: usuario de acceso, planes, WhatsApp y presupuestos
+
+### 5.1 Iniciar sesión con nombre de usuario
+
+Al registrarse, el doctor elige un **nombre de usuario** (además de su correo). Desde
+entonces puede iniciar sesión escribiendo su usuario o su correo, indistintamente.
+Internamente se guarda un documento en la colección `usernames` (`{uid, email}`) que
+la app consulta para encontrar el correo antes de llamar a Firebase Auth. Este
+documento es de lectura pública en las reglas (es necesario poder consultarlo
+*antes* de iniciar sesión), así que el correo de cada doctor queda visible para
+quien sepa su nombre de usuario — igual de expuesto que el `firebaseConfig`, no es
+información con la que se pueda hacer algo sin la contraseña.
+
+### 5.2 Planes y control de funciones (para ti, como dueño del sistema)
+
+Cada doctor tiene un documento en `doctors/{uid}` con un campo `plan`:
+**Básico**, **Pro** o **Premium**. Todo doctor nuevo empieza en **Básico**.
+Las funciones nuevas están condicionadas al plan (ver `FEATURE_MIN_PLAN` en
+`index.html` si quieres cambiar qué función va en qué plan):
+
+- **Pro**: confirmaciones/recordatorios de cita por WhatsApp + colores de
+  proximidad en las citas.
+- **Premium**: todo lo de Pro + planes de tratamiento y presupuestos.
+
+Para poder cambiarle el plan a un doctor necesitas ser **administrador**:
+
+1. En Firebase Console → Firestore Database → crea (si no existe) la colección
+   `admins`.
+2. Agrega un documento cuyo **ID sea tu propio uid** (lo ves en Authentication →
+   Users, columna "User UID"). No necesita campos, puede quedar vacío.
+3. Inicia sesión en la app con esa cuenta: verás un nuevo apartado
+   **"Administración"** en el menú, con la lista de doctores y botones para
+   asignarles Básico / Pro / Premium. Un doctor nunca puede subirse el plan a sí
+   mismo — solo tú, desde ahí.
+
+### 5.3 Confirmaciones y recordatorios de cita por WhatsApp
+
+No hay una API de WhatsApp Business conectada (eso requeriría un servicio de pago
+aparte, como Twilio o Meta Cloud API). Lo que sí incluye la app es un botón
+**"Confirmar/Recordar por WhatsApp"** en cada cita: abre `wa.me` con el número del
+paciente y el mensaje ya escrito — el doctor solo revisa y presiona enviar, usando
+su propio WhatsApp (el que tenga iniciado en su celular o en WhatsApp Web). Cada
+doctor guarda su número de contacto en **Ajustes**, dentro de la app.
+
+### 5.4 Colores de proximidad de las citas
+
+En el Panel y en Citas, las citas próximas se resaltan por color: hoy (rojo),
+mañana o pasado (ámbar), en la semana (azul); esto ayuda a detectar de un vistazo
+qué citas se acercan, sin necesidad de notificaciones push (que requerirían un
+backend con Firebase Cloud Functions, no incluido aquí).
+
+### 5.5 Planes de tratamiento y presupuestos
+
+Dentro del expediente de cada paciente, la pestaña **"Planes/Presupuestos"**
+permite armar un plan con procedimientos (diente, procedimiento, costo), calcular
+el total automáticamente, darle seguimiento (Propuesto → Aceptado → En progreso →
+Completado) y descargar un PDF de presupuesto para entregar al paciente.
+
 ## Notas importantes
 
 - **Cuentas de acceso (login):** ahora usan Firebase Authentication. El mismo correo y
