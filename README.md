@@ -12,11 +12,14 @@ dispositivo y ver la misma información, sincronizada en tiempo real.
 ## Estructura
 
 ```
-index.html            → la app completa (React + lógica + configuración de Firebase)
-manifest.json          → metadatos de la PWA (nombre, íconos, colores)
-service-worker.js      → habilita instalación y uso sin internet
-firestore.rules        → reglas de seguridad de la base de datos (quién puede leer/escribir qué)
-icons/                 → íconos de la app en distintos tamaños
+index.html               → la app completa (React + lógica + configuración de Firebase)
+manifest.json             → metadatos de la PWA (nombre, íconos, colores)
+service-worker.js         → habilita instalación y uso sin internet
+firebase-messaging-sw.js  → service worker de notificaciones push (ver sección 6)
+firestore.rules           → reglas de seguridad de la base de datos (quién puede leer/escribir qué)
+icons/                    → íconos de la app en distintos tamaños
+functions/                → Cloud Function programada que envía las notificaciones push (ver sección 6)
+firebase.json, .firebaserc → configuración del Firebase CLI para desplegar functions/
 ```
 
 ## 1. Conectar Firebase (necesario antes de usar la app)
@@ -188,10 +191,10 @@ doctor guarda su número de contacto en **Ajustes**, dentro de la app.
 
 En el Panel y en Citas, las citas próximas se resaltan por color: hoy (rojo),
 mañana o pasado (ámbar), en la semana (azul); esto ayuda a detectar de un vistazo
-qué citas se acercan, sin necesidad de notificaciones push (que requerirían un
-backend con Firebase Cloud Functions, no incluido aquí). Además, en el Panel
-general aparece un aviso/banner cuando hay citas hoy o mañana, visible cada vez
-que se abre el sistema (plan Premium).
+qué citas se acercan. Además, en el Panel general aparece un aviso/banner cuando
+hay citas hoy o mañana, visible cada vez que se abre el sistema (plan Premium).
+Para avisos que lleguen aunque la app esté cerrada, ve la sección
+"6. Notificaciones push" más abajo.
 
 ### 5.5 Planes de tratamiento y presupuestos
 
@@ -249,6 +252,91 @@ Cada receta:
 
 Para que el encabezado de tus recetas se vea completo, llena **Ajustes → Cédula
 profesional** y **Nombre del consultorio**.
+
+## 6. Notificaciones push (citas de hoy / mañana, aunque la app esté cerrada)
+
+El sistema puede avisar a cada doctor, con una notificación push en su celular o
+computadora, sus citas de **hoy** y de **mañana** — y llega aunque tenga la app
+cerrada. El **horario** de esos avisos (a qué hora llega el de "mañana" y a qué
+hora el de "hoy") lo define **el administrador, doctor por doctor**, desde el
+panel de Administración — no cada doctor. Cada doctor solo activa las
+notificaciones **en su propio dispositivo** desde Ajustes.
+
+### 6.1 Qué tan "en segundo plano" llega
+
+Es una notificación push real (Firebase Cloud Messaging / Web Push), no un
+simple aviso dentro de la app:
+
+- **Android** (Chrome, o la app instalada): llega igual que una app nativa,
+  aunque el navegador esté cerrado.
+- **Computadora** (Chrome/Edge): llega mientras el navegador siga corriendo en
+  segundo plano (lo normal, incluso con todas las ventanas cerradas, salvo que
+  el doctor haya cerrado Chrome por completo desde el administrador de tareas).
+- **iPhone (Safari)**: requiere iOS 16.4 o más reciente **y** que el doctor haya
+  instalado la app a su pantalla de inicio (ver sección "4. Instalarla como
+  app"). Sin eso, Safari no puede recibir push en segundo plano — es una
+  limitación de Apple, no de esta app.
+
+### 6.2 Qué necesitas activar en Firebase (una sola vez)
+
+1. **Plan Blaze:** los recordatorios programados usan Cloud Functions +
+   Cloud Scheduler, que requieren el plan de pago por uso (Blaze) — necesitas
+   una tarjeta registrada. Firebase Console → engrane ⚙️ → **Uso y
+   facturación** → **Cambiar plan** → Blaze. El volumen de este sistema
+   (un puñado de doctores, unas cuantas ejecuciones al día) normalmente cae
+   dentro de las cuotas gratuitas de Blaze o cuesta centavos al mes; revisa tu
+   uso ahí mismo si quieres confirmarlo.
+2. **Generar la clave VAPID:** Firebase Console → engrane ⚙️ → **Configuración
+   del proyecto** → pestaña **Cloud Messaging** → sección **Web configuration**
+   → **Generate key pair**. Copia la clave que aparece (empieza distinto a la
+   `apiKey`, es más larga) y pégala en `index.html`, en la constante
+   `VAPID_KEY` (busca `PEGA_AQUI_TU_VAPID_KEY_PUBLICA`).
+3. **Instalar Firebase CLI** (una sola vez en tu computadora):
+   ```bash
+   npm install -g firebase-tools
+   firebase login
+   ```
+4. **Desplegar la función programada:** dentro de la carpeta de este proyecto
+   (donde está `firebase.json`):
+   ```bash
+   firebase deploy --only functions
+   ```
+   Esto crea la función `sendCitasReminders` (revisa cada 15 minutos si algún
+   doctor tiene un aviso que enviar en ese momento) y su tarea de Cloud
+   Scheduler correspondiente. Si cambias la lógica en `functions/index.js`,
+   vuelve a correr este mismo comando para actualizarla.
+5. **Publica las reglas actualizadas** de `firestore.rules` (ver sección 1.5)
+   — se agregó protección para que solo un admin pueda cambiar el horario de
+   avisos de un doctor.
+
+### 6.3 Cómo se usa dentro de la app
+
+- **El administrador**, en **Administración**, ve debajo de cada doctor un
+  bloque "Recordatorios push de citas" con una casilla para activarlos y dos
+  horas: "Aviso de citas de MAÑANA" y "Aviso de citas de HOY". Puedes dejar
+  cualquiera de las dos vacía si solo quieres uno de los dos avisos. Las horas
+  se redondean a cuartos de hora porque el servidor revisa cada 15 minutos.
+- **Cada doctor**, en **Ajustes → Notificaciones**, presiona "Activar
+  notificaciones en este dispositivo" (el navegador pedirá permiso). Eso
+  registra ese dispositivo — el doctor puede repetirlo en cuantos dispositivos
+  use (celular y computadora, por ejemplo) y todos recibirán el aviso. Ahí
+  mismo ve, de forma informativa, el horario que le configuró el
+  administrador.
+- Si un doctor nunca activa notificaciones en ningún dispositivo, o si el
+  administrador no le configura horario, simplemente no le llega nada — no
+  hay ningún efecto secundario.
+
+### 6.4 Notas técnicas
+
+- El texto del aviso incluye cuántas citas hay y los primeros pacientes/horas
+  del día; las citas marcadas como "Cancelada" no cuentan. Si no hay citas ese
+  día, no se manda ningún aviso (para no generar ruido).
+- Si un token de notificación deja de ser válido (el doctor desinstaló la app,
+  borró datos del navegador, etc.), la función lo detecta y lo quita solo de
+  `doctors/{uid}.fcmTokens` en el siguiente envío fallido.
+- La zona horaria usada para interpretar los horarios es `America/Mexico_City`
+  (constante `TIMEZONE` en `functions/index.js`) — cámbiala ahí si tus doctores
+  están en otra zona.
 
 ## Notas importantes
 
