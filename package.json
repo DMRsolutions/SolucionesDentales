@@ -1,0 +1,13 @@
+{
+  "name": "dmr-consultorio-dental-functions",
+  "description": "Función programada que envía notificaciones push (citas de hoy / mañana) por doctor, según el horario que configura el administrador.",
+  "engines": {
+    "node": "20"
+  },
+  "main": "index.js",
+  "dependencies": {
+    "firebase-admin": "^12.6.0",
+    "firebase-functions": "^5.1.1"
+  },
+  "private": true
+}
