@@ -156,10 +156,14 @@ funciones nuevas están condicionadas al plan (ver `FEATURE_MIN_PLAN` en
   tratamiento *sin* costos (solo el listado de procedimientos por paciente).
 - **Premium**: todo lo de Básico, más — odontograma, aviso/banner de citas
   próximas al abrir el sistema, colores de proximidad en citas,
-  confirmaciones/recordatorios por WhatsApp, costos y presupuesto dentro de
-  los planes de tratamiento (con abono/liquidación en Pagos y descarga de PDF),
-  recetas, y cierre de sesión automático por inactividad (10 minutos sin
-  actividad; ver `INACTIVITY_LIMIT_MS` en `index.html` para cambiar el tiempo).
+  confirmaciones/recordatorios por WhatsApp (incluyendo el enlace de
+  confirmar/reagendar, ver 5.3), costos y presupuesto dentro de los planes de
+  tratamiento (con abono/liquidación en Pagos y descarga de PDF), recetas,
+  cierre de sesión automático por inactividad (10 minutos sin actividad; ver
+  `INACTIVITY_LIMIT_MS` en `index.html` para cambiar el tiempo), y las
+  alertas del Panel general de **tratamientos pendientes** y **pacientes con
+  citas canceladas** (los "presupuestos sin aceptar" y "saldos pendientes"
+  ya eran Premium por depender de los costos de los planes de tratamiento).
 
 **Nota sobre el plan "Pro" anterior:** si tenías doctores con ese plan
 intermedio, siguen funcionando exactamente igual que Premium (no perdieron
@@ -186,6 +190,34 @@ aparte, como Twilio o Meta Cloud API). Lo que sí incluye la app es un botón
 paciente y el mensaje ya escrito — el doctor solo revisa y presiona enviar, usando
 su propio WhatsApp (el que tenga iniciado en su celular o en WhatsApp Web). Cada
 doctor guarda su número de contacto en **Ajustes**, dentro de la app.
+
+**Enlace de confirmar/reagendar (se actualiza solo, sin que el doctor haga nada).**
+El mensaje que se manda al paciente incluye además un enlace único de su cita.
+Cuando el PACIENTE lo abre (no necesita cuenta ni contraseña) ve una pantalla con
+dos botones:
+
+- **"Confirmar mi cita"** → el sistema cambia sola el estado de la cita a
+  *Confirmada* en Firestore.
+- **"Necesito reagendar"** → el sistema cambia sola el estado a *Pidió reagendar*
+  (aparece como una etiqueta morada en Citas y en el Panel general); el doctor la
+  ve y contacta al paciente para acordar nueva fecha, y luego cambia el estado a
+  mano cuando la reagende.
+
+Esto lo procesa la Cloud Function pública `confirmarCita` (en `functions/index.js`)
+usando un token único que se genera para cada cita — nadie puede adivinar o abrir
+el enlace de la cita de otro paciente. Para que funcione:
+
+1. Despliega las funciones: `firebase deploy --only functions` (requiere el plan
+   Blaze de Firebase, igual que las notificaciones push — ver sección 6).
+2. En Firebase Console → **Functions**, copia la URL que te muestre para
+   `confirmarCita`. Por defecto la app arma esa URL sola a partir de tu
+   `projectId` (`https://us-central1-TU-PROYECTO.cloudfunctions.net/confirmarCita`);
+   si la consola te muestra una URL distinta, cámbiala en la constante
+   `CONFIRM_FUNCTION_URL` de `index.html` (cerca de `buildConfirmLink`).
+3. Listo — las citas que se agenden desde ahora incluirán el enlace en el mensaje
+   de WhatsApp automáticamente. Las citas creadas antes de este cambio no tienen
+   el enlace (no se puede generar en retroactivo), pero el resto del mensaje se
+   manda igual.
 
 ### 5.4 Colores de proximidad de las citas
 
