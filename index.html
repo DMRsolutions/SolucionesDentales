@@ -958,7 +958,7 @@ function Dashboard({ patients, appointments, payments, treatmentPlans, goToPatie
 function CitasProximasBanner({ appointments, patients }) {
   const [dismissed, setDismissed] = useState(false);
   const urgentes = appointments
-    .filter((a) => { const d = daysUntil(a.date); return d === 0 || d === 1; })
+    .filter((a) => { const d = daysUntil(a.date); return (d === 0 || d === 1) && a.status !== "atendida" && a.status !== "cancelada"; })
     .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
   if (dismissed || urgentes.length === 0) return null;
   return (
