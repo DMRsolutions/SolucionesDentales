@@ -401,12 +401,24 @@ function DentalApp() {
   // Si el administrador suspende el acceso del doctor (doctors/{uid}.disabled),
   // doctorProfile se actualiza solo (viene de un onSnapshot en tiempo real) y
   // esto cierra la sesión de inmediato, aunque el doctor tenga la app abierta.
+  //
+  // IMPORTANTE: solo se actúa cuando el dato ya fue confirmado por el servidor
+  // (doctorProfile._fromCache === false). Firestore tiene caché local
+  // (enablePersistence más abajo) y, sobre todo en PC/PWA de escritorio, al
+  // iniciar sesión primero llega una lectura desde esa caché local (que puede
+  // traer todavía "disabled: true" de una suspensión ya revertida) y una
+  // fracción de segundo después llega la confirmación real del servidor. Si
+  // reaccionábamos a la lectura de caché, el doctor se veía expulsado al
+  // instante aunque el admin ya lo hubiera reactivado ("se abre y se cierra
+  // solo"). En celular esto casi no se notaba porque la caché suele fallar o
+  // resolverse distinto. Ahora se ignora cualquier lectura que todavía venga
+  // de caché y solo se cierra sesión con el dato ya confirmado por el server.
   useEffect(() => {
-    if (currentUser && doctorProfile?.disabled === true) {
+    if (currentUser && doctorProfile?.disabled === true && doctorProfile?._fromCache === false) {
       try { sessionStorage.setItem("dmr_logout_reason", "suspendido"); } catch (e) {}
       auth.signOut().catch((err) => console.error("Error al cerrar sesión por suspensión:", err));
     }
-  }, [currentUser, doctorProfile?.disabled]);
+  }, [currentUser, doctorProfile?.disabled, doctorProfile?._fromCache]);
 
   // Escucha el estado de sesión de Firebase Auth (persiste entre recargas y dispositivos).
   useEffect(() => {
@@ -449,7 +461,8 @@ function DentalApp() {
       .onSnapshot((snap) => setPrescriptions(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
         (err) => console.error("Error leyendo recetas:", err));
     const unsubDoctor = db.collection("doctors").doc(uid)
-      .onSnapshot((doc) => setDoctorProfile(doc.exists ? { id: doc.id, ...doc.data() } : null),
+      .onSnapshot({ includeMetadataChanges: true }, (doc) =>
+        setDoctorProfile(doc.exists ? { id: doc.id, ...doc.data(), _fromCache: doc.metadata.fromCache } : null),
         (err) => console.error("Error leyendo el perfil del doctor:", err));
     // El estatus de administrador (dueño del sistema) se checa una sola vez: solo
     // existe el documento admins/{uid} para las cuentas que tú autorices a mano
@@ -598,7 +611,8 @@ function DentalApp() {
             onSelectPatient={(id) => { setView("pacientes"); setActivePatientId(id); }} />
         )}
         {view === "pacientes" && !activePatient && (
-          <PatientsList patients={patients} onSelect={(id) => setActivePatientId(id)} onAdd={addPatient} onDelete={deletePatient} />
+          <PatientsList patients={patients} payments={payments} treatmentPlans={treatmentPlans} subscriptionPlan={subscriptionPlan}
+            onSelect={(id) => setActivePatientId(id)} onAdd={addPatient} onDelete={deletePatient} />
         )}
         {view === "pacientes" && activePatient && (
           <PatientDetail patient={activePatient}
@@ -792,6 +806,7 @@ function StatusPill({ status }) {
     pendiente: { bg: "#FBF0DF", fg: AMBER, label: "Pendiente" },
     cancelada: { bg: "#F7E6E4", fg: RED, label: "Cancelada" },
     reagendar_solicitado: { bg: "#EDE9FB", fg: "#6C63C4", label: "Pidió reagendar" },
+    atendida: { bg: "#DCEBFB", fg: "#1F5FA8", label: "Atendida" },
   };
   const s = map[status] || map.pendiente;
   return <span style={{ fontSize: 11, fontWeight: 700, color: s.fg, background: s.bg, padding: "4px 9px", borderRadius: 20, whiteSpace: "nowrap" }}>{s.label}</span>;
@@ -856,29 +871,6 @@ function Modal({ title, onClose, children, wide }) {
 }
 
 /* ---------------- Dashboard ---------------- */
-/* Umbral de "paciente sin regresar": cuántos días sin una cita para que
-   aparezca en la lista de seguimiento. Ajustable aquí en un solo lugar. */
-const DIAS_SIN_REGRESAR = 90;
-
-/* Calcula, para cada paciente, su última cita pasada (no cancelada) y si
-   tiene alguna cita futura agendada. Un paciente aparece como "sin regresar"
-   si tuvo al menos una visita, no tiene ninguna cita futura, y su última
-   visita fue hace DIAS_SIN_REGRESAR días o más. */
-function calcularPacientesSinRegresar(patients, appointments, today) {
-  const hoyTime = new Date(today.slice(0, 4), Number(today.slice(5, 7)) - 1, today.slice(8, 10)).getTime();
-  return patients.map((p) => {
-    const citasPaciente = appointments.filter((a) => a.patientId === p.id && a.status !== "cancelada");
-    const pasadas = citasPaciente.filter((a) => a.date < today).sort((a, b) => b.date.localeCompare(a.date));
-    const tieneFutura = citasPaciente.some((a) => a.date >= today);
-    if (pasadas.length === 0 || tieneFutura) return null;
-    const ultima = pasadas[0].date;
-    const ultimaTime = new Date(ultima.slice(0, 4), Number(ultima.slice(5, 7)) - 1, ultima.slice(8, 10)).getTime();
-    const dias = Math.round((hoyTime - ultimaTime) / 86400000);
-    if (dias < DIAS_SIN_REGRESAR) return null;
-    return { patient: p, dias, ultima };
-  }).filter(Boolean).sort((a, b) => b.dias - a.dias);
-}
-
 /* Saldo pendiente por paciente: suma de (total del plan - abonado) de todos
    sus planes de tratamiento, igual que se calcula en la pestaña Pagos. */
 function calcularPacientesConSaldo(patients, payments, treatmentPlans) {
@@ -911,7 +903,6 @@ function Dashboard({ patients, appointments, payments, treatmentPlans, goToPatie
   const costosDisponibles = hasFeature(subscriptionPlan, "planesTratamiento");
   const alertasAvanzadas = hasFeature(subscriptionPlan, "alertasPanel");
 
-  const sinRegresar = calcularPacientesSinRegresar(patients, appointments, today);
   const tratamientosPendientes = alertasAvanzadas ? treatmentPlans.filter((t) => t.status === "en_progreso") : [];
   const presupuestosSinAceptar = costosDisponibles ? treatmentPlans.filter((t) => t.status === "propuesto") : [];
   const conSaldo = costosDisponibles ? calcularPacientesConSaldo(patients, payments, treatmentPlans) : [];
@@ -924,7 +915,6 @@ function Dashboard({ patients, appointments, payments, treatmentPlans, goToPatie
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 14, marginBottom: 28 }}>
         <StatCard icon={Users} label="Pacientes registrados" value={patients.length} color={NAVY} onClick={goToPatients} />
         <StatCard icon={CalendarIcon} label="Citas de hoy" value={citasHoy.length} color={TEAL} onClick={goToCitas} />
-        <StatCard icon={Clock} label="Sin regresar" value={sinRegresar.length} color={AMBER} />
         {alertasAvanzadas && <StatCard icon={Activity} label="Tratamientos pendientes" value={tratamientosPendientes.length} color="#6C63C4" onClick={goToPatients} />}
         {costosDisponibles && <StatCard icon={FileText} label="Presupuestos sin aceptar" value={presupuestosSinAceptar.length} color={AMBER} onClick={goToPatients} />}
         {costosDisponibles && <StatCard icon={DollarSign} label="Con saldo pendiente" value={conSaldo.length} color={RED} onClick={goToPatients} />}
@@ -934,81 +924,6 @@ function Dashboard({ patients, appointments, payments, treatmentPlans, goToPatie
         <div style={{ marginTop: -14, marginBottom: 24 }}>
           <LockedFeatureNote label="Tratamientos pendientes y citas canceladas" minPlan="premium" />
         </div>
-      )}
-
-      <Card style={{ marginBottom: 20 }}>
-        <SectionTitle>Pacientes a atender hoy</SectionTitle>
-        {citasHoy.length === 0 && <EmptyNote>No tienes citas programadas para hoy.</EmptyNote>}
-        <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 4 }}>
-          {citasHoy.map((a) => {
-            const paciente = patients.find((p) => p.id === a.patientId);
-            return (
-              <div key={a.id} onClick={() => paciente && onSelectPatient?.(paciente.id)}
-                style={{ display: "flex", alignItems: "center", gap: 14, padding: "10px 12px", borderRadius: 10, background: "#F0F6F6", cursor: paciente ? "pointer" : "default" }}>
-                <div style={{ width: 50, textAlign: "center", fontSize: 13, fontWeight: 700, color: TEAL }}>{a.time}</div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 14, fontWeight: 600 }}>{paciente?.name || "—"}</div>
-                  <div style={{ fontSize: 12.5, color: "#5B7480" }}>{a.reason}</div>
-                </div>
-                <StatusPill status={a.status} />
-              </div>
-            );
-          })}
-        </div>
-      </Card>
-
-      {(sinRegresar.length > 0 || tratamientosPendientes.length > 0 || presupuestosSinAceptar.length > 0 || conSaldo.length > 0 || conCancelaciones.length > 0) && (
-        <Card style={{ marginBottom: 20 }}>
-          <SectionTitle>Pacientes que necesitan tu atención</SectionTitle>
-          <div style={{ display: "flex", flexDirection: "column", gap: 18, marginTop: 6 }}>
-            {sinRegresar.length > 0 && (
-              <AtencionGrupo titulo={`Sin regresar en ${DIAS_SIN_REGRESAR}+ días (${sinRegresar.length})`} color={AMBER}>
-                {sinRegresar.slice(0, 8).map((r) => (
-                  <AtencionFila key={r.patient.id} onClick={() => onSelectPatient?.(r.patient.id)}
-                    nombre={r.patient.name} detalle={`Última visita: ${formatDateEs(r.ultima)} · hace ${r.dias} días`} />
-                ))}
-              </AtencionGrupo>
-            )}
-            {tratamientosPendientes.length > 0 && (
-              <AtencionGrupo titulo={`Tratamientos pendientes (${tratamientosPendientes.length})`} color="#6C63C4">
-                {tratamientosPendientes.slice(0, 8).map((pl) => {
-                  const paciente = patients.find((p) => p.id === pl.patientId);
-                  return (
-                    <AtencionFila key={pl.id} onClick={() => paciente && onSelectPatient?.(paciente.id)}
-                      nombre={paciente?.name || "—"} detalle={pl.title || "Plan de tratamiento"} />
-                  );
-                })}
-              </AtencionGrupo>
-            )}
-            {presupuestosSinAceptar.length > 0 && (
-              <AtencionGrupo titulo={`Presupuestos sin aceptar (${presupuestosSinAceptar.length})`} color={AMBER}>
-                {presupuestosSinAceptar.slice(0, 8).map((pl) => {
-                  const paciente = patients.find((p) => p.id === pl.patientId);
-                  return (
-                    <AtencionFila key={pl.id} onClick={() => paciente && onSelectPatient?.(paciente.id)}
-                      nombre={paciente?.name || "—"} detalle={pl.title || "Plan de tratamiento"} />
-                  );
-                })}
-              </AtencionGrupo>
-            )}
-            {conSaldo.length > 0 && (
-              <AtencionGrupo titulo={`Saldos pendientes (${conSaldo.length})`} color={RED}>
-                {conSaldo.slice(0, 8).map((r) => (
-                  <AtencionFila key={r.patient.id} onClick={() => onSelectPatient?.(r.patient.id)}
-                    nombre={r.patient.name} detalle={`Debe ${money(r.saldo)}`} />
-                ))}
-              </AtencionGrupo>
-            )}
-            {conCancelaciones.length > 0 && (
-              <AtencionGrupo titulo={`Con citas canceladas (${conCancelaciones.length})`} color={RED}>
-                {conCancelaciones.slice(0, 8).map((r) => (
-                  <AtencionFila key={r.patient.id} onClick={() => onSelectPatient?.(r.patient.id)}
-                    nombre={r.patient.name} detalle={`${r.canceladas} cita${r.canceladas === 1 ? "" : "s"} cancelada${r.canceladas === 1 ? "" : "s"}`} />
-                ))}
-              </AtencionGrupo>
-            )}
-          </div>
-        </Card>
       )}
 
       <Card>
@@ -1036,26 +951,6 @@ function Dashboard({ patients, appointments, payments, treatmentPlans, goToPatie
       </Card>
     </div>
   );
-}
-function AtencionGrupo({ titulo, color, children }) {
-  return (
-    <div>
-      <div style={{ fontSize: 12.5, fontWeight: 700, color, marginBottom: 8 }}>{titulo}</div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>{children}</div>
-    </div>
-  );
-}
-function AtencionFila({ nombre, detalle, onClick }) {
-  return (
-    <div onClick={onClick} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 10px", borderRadius: 8, background: "#F7FAFA", cursor: onClick ? "pointer" : "default" }}>
-      <span style={{ fontSize: 13, fontWeight: 600 }}>{nombre}</span>
-      <span style={{ fontSize: 12, color: "#5B7480" }}>{detalle}</span>
-    </div>
-  );
-}
-function formatDateEs(iso) {
-  const [y, m, d] = iso.split("-").map(Number);
-  return `${d} ${MONTHS_ES[m - 1].slice(0, 3)}`;
 }
 /* Aviso/banner de citas próximas — se muestra al abrir el Panel general si hay
    citas hoy o mañana (plan Pro en adelante). Se puede cerrar durante la sesión,
@@ -1098,10 +993,23 @@ function StatCard({ icon: IconC, label, value, color, onClick }) {
 }
 
 /* ---------------- Pacientes: lista ---------------- */
-function PatientsList({ patients, onSelect, onAdd, onDelete }) {
+/* Saldo de un paciente en particular: total de sus planes de tratamiento
+   menos lo abonado. tieneCuenta indica si el paciente tiene al menos un plan
+   con costo registrado (para distinguir "ya liquidó" de "no tiene planes"). */
+function calcularSaldoPaciente(patientId, payments, treatmentPlans) {
+  const planesPaciente = treatmentPlans.filter((t) => t.patientId === patientId);
+  let totalPlan = 0;
+  planesPaciente.forEach((pl) => { totalPlan += (pl.items || []).reduce((s2, it) => s2 + (Number(it.cost) || 0), 0); });
+  const abonado = payments.filter((pay) => planesPaciente.some((pl) => pl.id === pay.planId))
+    .reduce((s2, pay) => s2 + (Number(pay.paid) || 0), 0);
+  const saldo = Math.max(0, totalPlan - abonado);
+  return { saldo, tieneCuenta: totalPlan > 0 };
+}
+function PatientsList({ patients, payments = [], treatmentPlans = [], subscriptionPlan, onSelect, onAdd, onDelete }) {
   const [query, setQuery] = useState("");
   const [showForm, setShowForm] = useState(false);
   const filtered = patients.filter((p) => p.name.toLowerCase().includes(query.toLowerCase()));
+  const costosDisponibles = hasFeature(subscriptionPlan, "planesTratamiento");
   return (
     <div>
       <PageHeader title="Pacientes" subtitle={`${patients.length} pacientes registrados`}
@@ -1111,26 +1019,41 @@ function PatientsList({ patients, onSelect, onAdd, onDelete }) {
         <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Buscar paciente…"
           style={{ width: "100%", padding: "10px 12px 10px 36px", borderRadius: 10, border: "1px solid #DCE6E6", fontSize: 14, outline: "none" }} />
       </div>
+      {costosDisponibles && (
+        <div style={{ display: "flex", gap: 14, marginBottom: 16, fontSize: 12, color: "#5B7480" }}>
+          <span style={{ display: "flex", alignItems: "center", gap: 6 }}><span style={{ width: 9, height: 9, borderRadius: "50%", background: RED, display: "inline-block" }} /> Con saldo pendiente</span>
+          <span style={{ display: "flex", alignItems: "center", gap: 6 }}><span style={{ width: 9, height: 9, borderRadius: "50%", background: "#1E8C6E", display: "inline-block" }} /> Ya liquidó</span>
+        </div>
+      )}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 14 }}>
-        {filtered.map((p) => (
-          <div key={p.id} style={{ background: "#fff", border: "1px solid #E4ECEC", borderRadius: 14, padding: 18, position: "relative" }}>
-            <button onClick={(e) => { e.stopPropagation(); onDelete(p.id); }}
-              style={{ position: "absolute", top: 12, right: 12, background: "transparent", border: "none", color: "#C3D0D0" }} title="Eliminar paciente">
-              <Trash2 size={15} />
-            </button>
-            <div onClick={() => onSelect(p.id)} style={{ cursor: "pointer" }}>
-              <div style={{ width: 42, height: 42, borderRadius: "50%", background: NAVY, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: 15, marginBottom: 12, fontFamily: FONT_DISPLAY }}>
-                {p.name.split(" ").map((w) => w[0]).slice(0, 2).join("")}
-              </div>
-              <div style={{ fontSize: 15, fontWeight: 700 }}>{p.name}</div>
-              <div style={{ fontSize: 12.5, color: "#8A9BA3", margin: "2px 0 12px" }}>{p.age} años</div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 5, fontSize: 12.5, color: "#5B7480" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 6 }}><Phone size={12} /> {p.phone}</div>
-                <div style={{ display: "flex", alignItems: "center", gap: 6 }}><Mail size={12} /> {p.email}</div>
+        {filtered.map((p) => {
+          const { saldo, tieneCuenta } = costosDisponibles ? calcularSaldoPaciente(p.id, payments, treatmentPlans) : { saldo: 0, tieneCuenta: false };
+          const colorCuenta = tieneCuenta ? (saldo > 0 ? RED : "#1E8C6E") : null;
+          return (
+            <div key={p.id} style={{ background: "#fff", border: "1px solid #E4ECEC", borderRadius: 14, padding: 18, position: "relative", borderLeft: colorCuenta ? `4px solid ${colorCuenta}` : "1px solid #E4ECEC" }}>
+              <button onClick={(e) => { e.stopPropagation(); onDelete(p.id); }}
+                style={{ position: "absolute", top: 12, right: 12, background: "transparent", border: "none", color: "#C3D0D0" }} title="Eliminar paciente">
+                <Trash2 size={15} />
+              </button>
+              <div onClick={() => onSelect(p.id)} style={{ cursor: "pointer" }}>
+                <div style={{ width: 42, height: 42, borderRadius: "50%", background: NAVY, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: 15, marginBottom: 12, fontFamily: FONT_DISPLAY }}>
+                  {p.name.split(" ").map((w) => w[0]).slice(0, 2).join("")}
+                </div>
+                <div style={{ fontSize: 15, fontWeight: 700 }}>{p.name}</div>
+                <div style={{ fontSize: 12.5, color: "#8A9BA3", margin: "2px 0 12px" }}>{p.age} años</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 5, fontSize: 12.5, color: "#5B7480" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}><Phone size={12} /> {p.phone}</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}><Mail size={12} /> {p.email}</div>
+                </div>
+                {colorCuenta && (
+                  <div style={{ marginTop: 12, fontSize: 11.5, fontWeight: 700, color: colorCuenta }}>
+                    {saldo > 0 ? `Debe ${money(saldo)}` : "Al día · sin saldo pendiente"}
+                  </div>
+                )}
               </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
         {filtered.length === 0 && (
           <EmptyNote>{patients.length === 0 ? "Aún no tienes pacientes registrados. Agrega el primero con “Nuevo paciente”." : "No se encontraron pacientes con ese nombre."}</EmptyNote>
         )}
@@ -1641,13 +1564,13 @@ function CitasView({ appointments, patients, onAdd, onUpdateStatus, onDelete, su
                     </div>
                   </div>
                   <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap", alignItems: "center" }}>
-                    {["pendiente", "confirmada", "reagendar_solicitado", "cancelada"].map((s) => (
+                    {["pendiente", "confirmada", "reagendar_solicitado", "atendida", "cancelada"].map((s) => (
                       <button key={s} onClick={() => onUpdateStatus(a.id, s)} style={{
                         fontSize: 10.5, fontWeight: 700, padding: "4px 9px", borderRadius: 20, border: "1px solid",
                         borderColor: a.status === s ? "transparent" : "#DCE6E6",
                         background: a.status === s ? statusColor(s).bg : "#fff",
                         color: a.status === s ? statusColor(s).fg : "#8A9BA3" }}>
-                        {s === "pendiente" ? "Pendiente" : s === "confirmada" ? "Confirmada" : s === "reagendar_solicitado" ? "Pidió reagendar" : "Cancelada"}
+                        {s === "pendiente" ? "Pendiente" : s === "confirmada" ? "Confirmada" : s === "reagendar_solicitado" ? "Pidió reagendar" : s === "atendida" ? "Atendida" : "Cancelada"}
                       </button>
                     ))}
                     {whatsappDisponible
@@ -1668,7 +1591,7 @@ function CitasView({ appointments, patients, onAdd, onUpdateStatus, onDelete, su
     </div>
   );
 }
-function statusColor(s) { return { pendiente: { bg: "#FBF0DF", fg: AMBER }, confirmada: { bg: "#E3F3EF", fg: "#1E8C6E" }, cancelada: { bg: "#F7E6E4", fg: RED }, reagendar_solicitado: { bg: "#EDE9FB", fg: "#6C63C4" } }[s]; }
+function statusColor(s) { return { pendiente: { bg: "#FBF0DF", fg: AMBER }, confirmada: { bg: "#E3F3EF", fg: "#1E8C6E" }, cancelada: { bg: "#F7E6E4", fg: RED }, reagendar_solicitado: { bg: "#EDE9FB", fg: "#6C63C4" }, atendida: { bg: "#DCEBFB", fg: "#1F5FA8" } }[s]; }
 const navButtonStyle = { width: 30, height: 30, borderRadius: 8, border: "1px solid #DCE6E6", background: "#fff", display: "flex", alignItems: "center", justifyContent: "center", color: NAVY_DEEP };
 function AppointmentForm({ patientId, patients, defaultDate, onSubmit, onCancel }) {
   const [form, setForm] = useState({ patientId: patientId || (patients?.[0]?.id ?? ""), date: defaultDate || todayISO(), time: "09:00", reason: "", status: "pendiente" });
@@ -1751,7 +1674,7 @@ function ReportsView({ appointments, payments, patients, }) {
         startY: y, margin: { left: 14, right: 14 }, theme: "striped",
         head: [["Fecha", "Hora", "Paciente", "Motivo", "Estado"]],
         body: citasRango.map((a) => [formatDate(a.date), a.time, nombrePaciente(a.patientId), a.reason,
-          a.status === "pendiente" ? "Pendiente" : a.status === "confirmada" ? "Confirmada" : a.status === "reagendar_solicitado" ? "Pidió reagendar" : "Cancelada"]),
+          a.status === "pendiente" ? "Pendiente" : a.status === "confirmada" ? "Confirmada" : a.status === "reagendar_solicitado" ? "Pidió reagendar" : a.status === "atendida" ? "Atendida" : "Cancelada"]),
         headStyles: { fillColor: [30, 140, 140] }, styles: { fontSize: 8.5 },
       });
       y = doc.lastAutoTable.finalY + 12;
