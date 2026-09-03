@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>Tu cita — DMR Consultorio Dental</title>
+<meta name="robots" content="noindex, nofollow" />
+<!--
+  Página pública de "Confirmar / Reagendar cita" — la abre el PACIENTE desde el
+  enlace que le llega por WhatsApp (ver WhatsAppButton / buildConfirmLink en
+  index.html). No requiere cuenta ni contraseña, ni Cloud Functions, ni plan
+  Blaze de Firebase: inicia sesión anónima y escribe directo a Firestore, con
+  reglas de seguridad que solo permiten cambiar el "status" de ESA cita
+  (ver firestore.rules). Antes de usarla:
+    1) Activa el inicio de sesión anónimo: Firebase Console → Authentication →
+       Sign-in method → Anonymous → Habilitar.
+    2) Publica las reglas de firestore.rules (Firestore Database → Rules).
+    3) Sube este archivo junto con index.html al mismo sitio (GitHub Pages u
+       otro hosting) — no necesita configuración aparte.
+  Ver README, sección 5.3, para más detalle.
+-->
+<style>
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font-family: 'Inter', -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    background: #F0F6F6; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    padding: 24px;
+  }
+  .tarjeta {
+    background: #fff; border-radius: 16px; padding: 34px 26px; max-width: 420px; width: 100%;
+    box-shadow: 0 4px 18px rgba(11,31,51,0.10); text-align: center;
+  }
+  .icono { font-size: 40px; margin-bottom: 10px; line-height: 1; }
+  h1 { font-family: 'Space Grotesk', 'Inter', sans-serif; font-size: 19px; color: #0B1F33; margin: 0 0 10px; }
+  p { font-size: 14.5px; color: #5B7480; line-height: 1.55; margin: 0 0 20px; }
+  .detalle {
+    background: #F7FAFA; border-radius: 10px; padding: 14px 16px; margin-bottom: 22px;
+    text-align: left; font-size: 13.5px; color: #0B1F33;
+  }
+  .detalle div + div { margin-top: 6px; }
+  .detalle b { color: #1E8C8C; }
+  .boton {
+    display: block; width: 100%; padding: 13px 18px; border-radius: 10px; border: none;
+    font-size: 15px; font-weight: 700; text-decoration: none; margin-bottom: 12px; cursor: pointer;
+    font-family: inherit;
+  }
+  .boton-confirmar { background: #1E8C8C; color: #fff; }
+  .boton-confirmar:disabled { opacity: 0.6; cursor: default; }
+  .boton-reagendar { background: #fff; color: #0B1F33; border: 1.5px solid #DCE6E6; }
+  .boton-reagendar:disabled { opacity: 0.6; cursor: default; }
+  .spinner {
+    width: 28px; height: 28px; border: 3px solid #DCE6E6; border-top-color: #1E8C8C;
+    border-radius: 50%; margin: 6px auto 14px; animation: girar 0.8s linear infinite;
+  }
+  @keyframes girar { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+  <div class="tarjeta" id="tarjeta">
+    <div class="spinner"></div>
+    <p>Cargando tu cita…</p>
+  </div>
+
+  <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
+  <script>
+    /* Mismo firebaseConfig que index.html — no es secreto (ver nota ahí). */
+    const firebaseConfig = {
+      apiKey: "AIzaSyCbxIVUXL30eZOJBOpuXWglUjDS2LmfYls",
+      authDomain: "solucionesdentales.firebaseapp.com",
+      projectId: "solucionesdentales",
+      storageBucket: "solucionesdentales.firebasestorage.app",
+      messagingSenderId: "437439340711",
+      appId: "1:437439340711:web:697c8c4f25b04b8ab33b82",
+    };
+    firebase.initializeApp(firebaseConfig);
+    const auth = firebase.auth();
+    const db = firebase.firestore();
+
+    const MESES_ES = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+    function formatearFecha(iso) {
+      if (!iso) return "";
+      const [y, m, d] = iso.split("-").map(Number);
+      if (!y || !m || !d) return iso;
+      return `${d} de ${MESES_ES[m - 1]} de ${y}`;
+    }
+    function escaparHtml(str) {
+      return String(str ?? "").replace(/[&<>"']/g, (c) => (
+        { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+      ));
+    }
+
+    const tarjeta = document.getElementById("tarjeta");
+    function mostrar(html) { tarjeta.innerHTML = html; }
+    function mostrarError(mensaje) {
+      mostrar(`
+        <div class="icono">⚠️</div>
+        <h1>No pudimos abrir tu cita</h1>
+        <p>${escaparHtml(mensaje)}</p>
+      `);
+    }
+    function mostrarResultado({ icono, titulo, mensaje }) {
+      mostrar(`
+        <div class="icono">${icono}</div>
+        <h1>${escaparHtml(titulo)}</h1>
+        <p>${escaparHtml(mensaje)}</p>
+      `);
+    }
+
+    const params = new URLSearchParams(window.location.search);
+    const id = (params.get("id") || "").trim();
+    const token = (params.get("token") || "").trim();
+
+    if (!id || !token) {
+      mostrarError("Este enlace no es válido o está incompleto. Pide a tu consultorio que te envíe uno nuevo.");
+    } else {
+      iniciar();
+    }
+
+    async function iniciar() {
+      try {
+        await auth.signInAnonymously();
+      } catch (err) {
+        console.error("No se pudo iniciar sesión anónima:", err);
+        mostrarError("No pudimos conectar con el consultorio en este momento. Intenta de nuevo en unos minutos.");
+        return;
+      }
+
+      let snap;
+      try {
+        snap = await db.collection("appointments").doc(id).get();
+      } catch (err) {
+        console.error("No se pudo leer la cita:", err);
+        mostrarError("No pudimos abrir tu cita en este momento. Intenta de nuevo en unos minutos.");
+        return;
+      }
+
+      if (!snap.exists) {
+        mostrarError("No encontramos esta cita. Es posible que ya no exista.");
+        return;
+      }
+      const cita = snap.data();
+      if (!cita.confirmToken || cita.confirmToken !== token) {
+        mostrarError("Este enlace no es válido.");
+        return;
+      }
+      if (cita.status === "cancelada") {
+        mostrarResultado({ icono: "ℹ️", titulo: "Esta cita fue cancelada",
+          mensaje: "El consultorio canceló esta cita. Si tienes dudas, contáctalos directamente." });
+        return;
+      }
+
+      mostrarOpciones(cita);
+    }
+
+    function mostrarOpciones(cita) {
+      mostrar(`
+        <div class="icono">🦷</div>
+        <h1>Tu próxima cita</h1>
+        <p>Confírmala o avísanos si necesitas reagendar.</p>
+        <div class="detalle">
+          <div><b>Fecha:</b> ${escaparHtml(formatearFecha(cita.date))}</div>
+          <div><b>Hora:</b> ${escaparHtml(cita.time || "")}</div>
+          ${cita.reason ? `<div><b>Motivo:</b> ${escaparHtml(cita.reason)}</div>` : ""}
+        </div>
+        <button class="boton boton-confirmar" id="btnConfirmar">✅ Confirmar mi cita</button>
+        <button class="boton boton-reagendar" id="btnReagendar">🔁 Necesito reagendar</button>
+      `);
+      document.getElementById("btnConfirmar").addEventListener("click", () => enviarAccion("confirmar"));
+      document.getElementById("btnReagendar").addEventListener("click", () => enviarAccion("reagendar"));
+    }
+
+    async function enviarAccion(accion) {
+      const btnConfirmar = document.getElementById("btnConfirmar");
+      const btnReagendar = document.getElementById("btnReagendar");
+      if (btnConfirmar) btnConfirmar.disabled = true;
+      if (btnReagendar) btnReagendar.disabled = true;
+
+      try {
+        if (accion === "confirmar") {
+          await db.collection("appointments").doc(id).update({
+            status: "confirmada",
+            confirmedAt: firebase.firestore.FieldValue.serverTimestamp(),
+            confirmedVia: "whatsapp_link",
+          });
+          mostrarResultado({ icono: "✅", titulo: "¡Cita confirmada!",
+            mensaje: "Gracias, tu cita quedó confirmada. ¡Te esperamos!" });
+        } else {
+          await db.collection("appointments").doc(id).update({
+            status: "reagendar_solicitado",
+            rescheduleRequestedAt: firebase.firestore.FieldValue.serverTimestamp(),
+          });
+          mostrarResultado({ icono: "🔁", titulo: "¡Listo, avisamos al consultorio!",
+            mensaje: "Ya avisamos que necesitas reagendar tu cita. Te contactarán pronto para acordar una nueva fecha." });
+        }
+      } catch (err) {
+        console.error("No se pudo actualizar la cita:", err);
+        mostrarError("No pudimos guardar tu respuesta. Intenta de nuevo en unos minutos, o contacta directo al consultorio.");
+      }
+    }
+  </script>
+</body>
+</html>

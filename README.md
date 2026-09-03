@@ -13,6 +13,8 @@ dispositivo y ver la misma información, sincronizada en tiempo real.
 
 ```
 index.html               → la app completa (React + lógica + configuración de Firebase)
+confirmar.html           → página pública "Confirmar/Reagendar cita" que abre el paciente
+                            desde WhatsApp — ver sección 5.3
 manifest.json             → metadatos de la PWA (nombre, íconos, colores)
 service-worker.js         → habilita instalación y uso sin internet
 firebase-messaging-sw.js  → service worker de notificaciones push (ver sección 6)
@@ -191,10 +193,11 @@ paciente y el mensaje ya escrito — el doctor solo revisa y presiona enviar, us
 su propio WhatsApp (el que tenga iniciado en su celular o en WhatsApp Web). Cada
 doctor guarda su número de contacto en **Ajustes**, dentro de la app.
 
-**Enlace de confirmar/reagendar (se actualiza solo, sin que el doctor haga nada).**
-El mensaje que se manda al paciente incluye además un enlace único de su cita.
-Cuando el PACIENTE lo abre (no necesita cuenta ni contraseña) ve una pantalla con
-dos botones:
+**Enlace de confirmar/reagendar (se actualiza solo, sin que el doctor haga nada,
+y sin plan de pago de Firebase).** El mensaje que se manda al paciente incluye
+además un enlace único de su cita, que abre `confirmar.html` (un archivo más de
+este mismo proyecto). Cuando el PACIENTE lo abre (no necesita cuenta ni
+contraseña) ve una pantalla con dos botones:
 
 - **"Confirmar mi cita"** → el sistema cambia sola el estado de la cita a
   *Confirmada* en Firestore.
@@ -203,21 +206,26 @@ dos botones:
   ve y contacta al paciente para acordar nueva fecha, y luego cambia el estado a
   mano cuando la reagende.
 
-Esto lo procesa la Cloud Function pública `confirmarCita` (en `functions/index.js`)
-usando un token único que se genera para cada cita — nadie puede adivinar o abrir
-el enlace de la cita de otro paciente. Para que funcione:
+`confirmar.html` no usa Cloud Functions ni requiere el plan Blaze: inicia una
+sesión anónima de Firebase y escribe directo a Firestore, protegida por un
+token único generado para cada cita (nadie puede adivinar o abrir el enlace de
+la cita de otro paciente) y por reglas de seguridad que solo permiten cambiar
+el campo `status` de esa cita, nunca nada más (ver `firestore.rules`). Para
+activarlo:
 
-1. Despliega las funciones: `firebase deploy --only functions` (requiere el plan
-   Blaze de Firebase, igual que las notificaciones push — ver sección 6).
-2. En Firebase Console → **Functions**, copia la URL que te muestre para
-   `confirmarCita`. Por defecto la app arma esa URL sola a partir de tu
-   `projectId` (`https://us-central1-TU-PROYECTO.cloudfunctions.net/confirmarCita`);
-   si la consola te muestra una URL distinta, cámbiala en la constante
-   `CONFIRM_FUNCTION_URL` de `index.html` (cerca de `buildConfirmLink`).
-3. Listo — las citas que se agenden desde ahora incluirán el enlace en el mensaje
-   de WhatsApp automáticamente. Las citas creadas antes de este cambio no tienen
-   el enlace (no se puede generar en retroactivo), pero el resto del mensaje se
-   manda igual.
+1. **Activa el inicio de sesión anónimo:** Firebase Console → **Authentication**
+   → pestaña **Sign-in method** → **Anonymous** → Habilitar. Es gratis, no
+   requiere plan Blaze.
+2. Publica las reglas actualizadas de `firestore.rules` (Firestore Database →
+   pestaña **Rules** → pega el contenido del archivo → **Publish**), igual que
+   en el paso 1.5.
+3. Sube `confirmar.html` junto con el resto del proyecto (ya viaja en la misma
+   carpeta) — al publicarlo en GitHub Pages (paso 3) queda disponible solo en
+   este mismo sitio, sin configuración aparte.
+4. Listo — las citas que se agenden desde ahora incluirán el enlace en el
+   mensaje de WhatsApp automáticamente. Las citas creadas antes de este cambio
+   no tienen el enlace (no se puede generar en retroactivo), pero el resto del
+   mensaje se manda igual.
 
 ### 5.4 Colores de proximidad de las citas
 
