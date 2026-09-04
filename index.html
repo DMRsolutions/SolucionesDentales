@@ -98,6 +98,16 @@ const firebaseConfig = {
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.firestore();
+// IMPORTANTE — arregla el problema de "funciona con wifi pero no con datos
+// móviles": por default Firestore intenta una conexión tipo streaming
+// (WebChannel/HTTP2), y muchas redes de operadores celulares (Telcel, AT&T,
+// Movistar, etc.) la bloquean con sus proxys, dejando la app "colgada" al
+// cargar datos. Forzamos "long polling" (peticiones HTTP normales), que sí
+// atraviesa esas redes sin problema. Debe llamarse antes de usar db.
+db.settings({
+  experimentalAutoDetectLongPolling: true,
+  useFetchStreams: false,
+});
 // Cache local (IndexedDB) para que la app siga funcionando sin conexión
 // y sincronice automáticamente cuando vuelva el internet — clave para la PWA.
 db.enablePersistence({ synchronizeTabs: true }).catch((err) => {
