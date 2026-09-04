@@ -12,9 +12,24 @@
 // de red. Si no subes este archivo, la estrategia de red-primero de abajo debería
 // bastar por sí sola, pero subir la versión es la forma más segura de garantizar
 // que no quede nada viejo en caché.
-const CACHE_VERSION = "dmr-dental-v3";
+const CACHE_VERSION = "dmr-dental-v4";
 const APP_SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const RUNTIME_CACHE = `${CACHE_VERSION}-runtime`;
+
+// IMPORTANTE — arregla el problema de "se queda trabado en el logo" en datos
+// móviles: en redes de operador celular, una petición a veces no falla ni
+// responde, se queda "colgada" sin avisar. fetch() por sí solo no tiene límite
+// de tiempo, así que sin esto la app podía esperar para siempre. Con esto, si
+// la red no responde en unos segundos, se usa el caché de inmediato.
+function fetchConLimite(request, ms = 4000) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("timeout")), ms);
+    fetch(request).then(
+      (res) => { clearTimeout(timer); resolve(res); },
+      (err) => { clearTimeout(timer); reject(err); }
+    );
+  });
+}
 
 const APP_SHELL = [
   "./",
@@ -57,7 +72,7 @@ self.addEventListener("fetch", (event) => {
     // y el doctor recargue, ve la versión nueva de inmediato — el caché solo se usa
     // como respaldo si no hay conexión.
     event.respondWith(
-      fetch(request)
+      fetchConLimite(request)
         .then((response) => {
           if (response && response.ok) {
             const clone = response.clone();
@@ -72,7 +87,7 @@ self.addEventListener("fetch", (event) => {
     // silenciosa en segundo plano — cambian poco y no urge que se vean al instante.
     event.respondWith(
       caches.match(request).then((cached) => {
-        const networkFetch = fetch(request)
+        const networkFetch = fetchConLimite(request)
           .then((response) => {
             if (response && response.ok) {
               const clone = response.clone();
@@ -89,7 +104,7 @@ self.addEventListener("fetch", (event) => {
     // con respaldo en caché para que la app siga funcionando sin conexión
     // una vez que se cargó al menos una vez.
     event.respondWith(
-      fetch(request)
+      fetchConLimite(request)
         .then((response) => {
           const clone = response.clone();
           caches.open(RUNTIME_CACHE).then((cache) => cache.put(request, clone));
